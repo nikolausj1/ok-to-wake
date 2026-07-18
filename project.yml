@@ -9,7 +9,13 @@ targets:
     platform: iOS
     deploymentTarget: "17.0"
     sources:
-      - Sources
+      # Bundled audio is a resource, not compiled source; exclude it here and
+      # add it back with an explicit resources build phase.
+      - path: Sources
+        excludes:
+          - "App/Audio/**"
+      - path: Sources/App/Audio
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.levelup.oktowake
@@ -28,6 +34,10 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ITSAppUsesNonExemptEncryption: false
+        # Keeps white noise alive across brief backgrounding (PRD edge row 10);
+        # the supported model is still foreground-all-night.
+        UIBackgroundModes:
+          - audio
         UILaunchScreen: {}
         UIApplicationSupportsIndirectInputEvents: true
         UISupportedInterfaceOrientations:
