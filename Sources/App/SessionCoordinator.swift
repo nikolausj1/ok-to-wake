@@ -257,6 +257,9 @@ final class SessionCoordinator: ObservableObject {
     ///   -demoSettings                handled in HomeView (opens Settings)
     ///   -demoGate / -demoGateFlow    handled here (kid lock on) + SleepView
     ///                                (gate overlay / scripted gated end-session)
+    ///   -demoNoiseSound <id>         select the white noise asset first
+    ///   -demoAlarmSound <id>         enable the alarm + select its asset
+    ///                                (both for per-asset load/play log checks)
     ///
     /// Returns true when a hook took over the launch path (skips recovery).
     private func applyDemoLaunchArguments() -> Bool {
@@ -269,6 +272,17 @@ final class SessionCoordinator: ObservableObject {
         if args.contains("-demoGate") || args.contains("-demoGateFlow") {
             settings.kidLockEnabled = true
             log.notice("DEMO: kid lock forced on for gate demo")
+        }
+        // Sound selection hooks (Phase 6): apply before any state hook so the
+        // real start path picks up the chosen assets.
+        if let id = value(after: "-demoNoiseSound") {
+            settings.whiteNoiseSound = id
+            log.notice("DEMO: -demoNoiseSound \(id, privacy: .public)")
+        }
+        if let id = value(after: "-demoAlarmSound") {
+            settings.alarmEnabled = true
+            settings.alarmSound = id
+            log.notice("DEMO: -demoAlarmSound \(id, privacy: .public)")
         }
         if let state = value(after: "-demoState") {
             log.notice("DEMO: -demoState \(state, privacy: .public)")

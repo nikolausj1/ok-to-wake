@@ -267,9 +267,11 @@ final class AudioController: NSObject, ObservableObject {
 /// The single registry the pickers, settings, and audio layer share
 /// (PRD Section 8, "Bundled content"). Asset id == bundled CAF file name.
 enum SoundLibrary {
-    /// Phase 2 placeholders; Phase 6 replaces/extends these with Justin's picks.
-    static let whiteNoiseIDs = ["classicWhite"]
-    static let alarmIDs = ["gentleChime"]
+    /// Phase 6 shipping set. Ids are stable (they live in persisted settings,
+    /// so `classicWhite`/`gentleChime` keep their Phase 2 ids); candidates and
+    /// rejects for swapping live in `_review/sounds/`.
+    static let whiteNoiseIDs = ["classicWhite", "pinkNoise", "brownNoise", "rain"]
+    static let alarmIDs = ["gentleChime", "morningBirds", "playfulMelody"]
 
     static func url(forAssetID id: String) -> URL? {
         Bundle.main.url(forResource: id, withExtension: "caf")
@@ -279,7 +281,12 @@ enum SoundLibrary {
     static func displayName(forAssetID id: String) -> String {
         switch id {
         case "classicWhite": return "Classic White"
+        case "pinkNoise": return "Pink Noise"
+        case "brownNoise": return "Brown Noise"
+        case "rain": return "Rain"
         case "gentleChime": return "Gentle Chime"
+        case "morningBirds": return "Morning Birds"
+        case "playfulMelody": return "Playful Melody"
         default: return id
         }
     }
