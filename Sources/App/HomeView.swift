@@ -11,7 +11,7 @@ struct HomeView: View {
     @State private var showPicker = false
     @State private var showChargingNotice = false
     @State private var showSoundSheet = false
-    @State private var showSettingsPlaceholder = false
+    @State private var showSettings = false
 
     var body: some View {
         GeometryReader { geo in
@@ -42,10 +42,16 @@ struct HomeView: View {
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showSettingsPlaceholder) {
-            SettingsPlaceholderSheet()
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
+        .fullScreenCover(isPresented: $showSettings) {
+            SettingsView()
+        }
+        .onAppear {
+            #if DEBUG
+            // Build Guide: simctl can't tap - open Settings for screenshots.
+            if ProcessInfo.processInfo.arguments.contains("-demoSettings") {
+                showSettings = true
+            }
+            #endif
         }
     }
 
@@ -222,7 +228,7 @@ struct HomeView: View {
             Spacer()
             Text(alarmStatusText)
             Spacer()
-            Button { showSettingsPlaceholder = true } label: {
+            Button { showSettings = true } label: {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 19))
                     .frame(width: 44, height: 44, alignment: .trailing)
@@ -234,8 +240,8 @@ struct HomeView: View {
     }
 }
 
-/// Quick sound/volume sheet from the Home secondary row (same controls as
-/// Settings will have in Phase 5).
+/// Quick sound/volume sheet from the Home secondary row (a shortcut to the
+/// same white noise controls Settings has).
 struct SoundQuickSheet: View {
     @EnvironmentObject private var coordinator: SessionCoordinator
 
@@ -278,28 +284,6 @@ struct SoundQuickSheet: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Theme.panel)
-        .preferredColorScheme(.dark)
-    }
-}
-
-/// Placeholder until Phase 5 delivers the full Settings screen + parent gate.
-struct SettingsPlaceholderSheet: View {
-    var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: 36))
-                .foregroundStyle(Theme.textMuted)
-            Text("Settings coming in the next phase")
-                .font(.system(.body, design: .rounded))
-                .foregroundStyle(Theme.textPrimary)
-            Text("Alarm, offsets, kid lock, and the parent gate arrive in Phase 5.")
-                .font(.system(.footnote, design: .rounded))
-                .foregroundStyle(Theme.textMuted)
-                .multilineTextAlignment(.center)
-        }
-        .padding(28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.panel)
         .preferredColorScheme(.dark)
     }

@@ -27,7 +27,9 @@ final class AudioController: NSObject, ObservableObject {
     private let log = Logger(subsystem: "com.levelup.oktowake", category: "audio")
     private var noisePlayer: AVAudioPlayer?
     private var alarmPlayer: AVAudioPlayer?
+    private var previewPlayer: AVAudioPlayer?
     private var fadeStopWorkItem: DispatchWorkItem?
+    private var previewStopWorkItem: DispatchWorkItem?
     private var noiseVolume: Float = 0.5
 
     override init() {
@@ -128,6 +130,49 @@ final class AudioController: NSObject, ObservableObject {
         fadeStopWorkItem = nil
     }
 
+    // MARK: - Settings tap-preview (PRD D: ~5 s)
+
+    static let previewDuration: TimeInterval = 5
+
+    /// Short preview for the Settings sound pickers and volume sliders.
+    /// Uses its own player so a mid-session preview never disturbs the
+    /// running white noise player.
+    func previewSound(soundID: String, volume: Double) {
+        stopPreview()
+        guard let url = SoundLibrary.url(forAssetID: soundID) else {
+            log.error("preview asset missing: \(soundID, privacy: .public)")
+            return
+        }
+        // Outside a session the .playback category may not be active yet;
+        // activating here is harmless when a session already owns it.
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .default)
+        try? session.setActive(true)
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.numberOfLoops = -1   // short files still fill the full ~5 s
+            player.volume = Float(min(max(volume, 0), 1))
+            player.prepareToPlay()
+            player.play()
+            previewPlayer = player
+            log.notice("preview \(soundID, privacy: .public) started (~\(Int(Self.previewDuration))s)")
+            let work = DispatchWorkItem { [weak self] in self?.stopPreview() }
+            previewStopWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.previewDuration, execute: work)
+        } catch {
+            log.error("preview player failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Stops any preview. Never deactivates the shared audio session - a
+    /// running night session owns it.
+    func stopPreview() {
+        previewStopWorkItem?.cancel()
+        previewStopWorkItem = nil
+        previewPlayer?.stop()
+        previewPlayer = nil
+    }
+
     // MARK: - Alarm
 
     /// Loops until stopAlarm(); the engine handles the 5-minute auto-stop by
@@ -151,6 +196,11 @@ final class AudioController: NSObject, ObservableObject {
             log.error("alarm player failed: \(error.localizedDescription, privacy: .public)")
             audioUnavailable = true
         }
+    }
+
+    /// Live volume change from the Settings alarm slider while an alarm sounds.
+    func setAlarmVolume(_ volume: Double) {
+        alarmPlayer?.volume = Float(min(max(volume, 0), 1))
     }
 
     func stopAlarm() {

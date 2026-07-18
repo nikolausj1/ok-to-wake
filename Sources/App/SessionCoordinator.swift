@@ -25,6 +25,7 @@ final class SessionCoordinator: ObservableObject {
             guard settings != oldValue else { return }
             store.settings = settings
             audio.setNoiseVolume(settings.whiteNoiseVolume)
+            audio.setAlarmVolume(settings.alarmVolume)
             if var session = activeSession {
                 session.settingsSnapshot = settings
                 activeSession = session
@@ -253,6 +254,9 @@ final class SessionCoordinator: ObservableObject {
     ///   -demoWakeIn <seconds>        real session, wake time N seconds out
     ///                                (rounded up to the next whole minute)
     ///   -demoLandscape               handled in RootView (forces landscape)
+    ///   -demoSettings                handled in HomeView (opens Settings)
+    ///   -demoGate / -demoGateFlow    handled here (kid lock on) + SleepView
+    ///                                (gate overlay / scripted gated end-session)
     ///
     /// Returns true when a hook took over the launch path (skips recovery).
     private func applyDemoLaunchArguments() -> Bool {
@@ -260,6 +264,11 @@ final class SessionCoordinator: ObservableObject {
         func value(after flag: String) -> String? {
             guard let i = args.firstIndex(of: flag), args.indices.contains(i + 1) else { return nil }
             return args[i + 1]
+        }
+        // Gate demos need kid lock on before the session snapshot is taken.
+        if args.contains("-demoGate") || args.contains("-demoGateFlow") {
+            settings.kidLockEnabled = true
+            log.notice("DEMO: kid lock forced on for gate demo")
         }
         if let state = value(after: "-demoState") {
             log.notice("DEMO: -demoState \(state, privacy: .public)")
