@@ -19,13 +19,16 @@ struct RootView: View {
             }
             .transition(.opacity)
 
-            // DimOverlay: on with the sleep state, off for Home and wake.
+            // DimOverlay: on with the sleep state, off for Home and wake -
+            // and lifted while the night controls panel is up (Phase 8 spec:
+            // the panel must be clearly visible, not buried under the dim).
             Color.black
-                .opacity(coordinator.displayState == .sleep ? 0.45 : 0)
+                .opacity(coordinator.displayState == .sleep && !coordinator.nightPanelVisible ? 0.45 : 0)
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
         }
         .animation(.easeInOut(duration: 0.8), value: coordinator.displayState)
+        .animation(.easeInOut(duration: 0.8), value: coordinator.nightPanelVisible)
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)

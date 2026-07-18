@@ -18,6 +18,10 @@ final class SessionCoordinator: ObservableObject {
     /// pulled): fully black screen, audio continues, tap peeks the clock
     /// (PRD B battery-saver dark mode). Automatic, never a setting.
     @Published private(set) var batterySaverActive = false
+    /// True while the night controls panel is up (Phase 8 spec). Owned by
+    /// SleepView; RootView lifts the DimOverlay while it is set so the panel
+    /// is clearly visible. Cleared on every path that leaves the sleep state.
+    @Published var nightPanelVisible = false
     /// Bind UI controls straight to this; changes persist immediately and,
     /// mid-session, update the session's settings snapshot (PRD Section 8).
     @Published var settings: AppSettings {
@@ -163,6 +167,7 @@ final class SessionCoordinator: ObservableObject {
         store.clearActiveSession()
         activeSession = nil
         batterySaverActive = false
+        nightPanelVisible = false
         log.notice("session ended -> Home")
         setDisplayState(.idle)
     }
@@ -234,6 +239,7 @@ final class SessionCoordinator: ObservableObject {
                     store.activeSession = updated
                 }
             case .enterWake:
+                nightPanelVisible = false
                 display.enterWakeBrightness()
                 setDisplayState(.wake)
             case .sessionEnded:
@@ -288,10 +294,11 @@ final class SessionCoordinator: ObservableObject {
             guard let i = args.firstIndex(of: flag), args.indices.contains(i + 1) else { return nil }
             return args[i + 1]
         }
-        // Gate demos need kid lock on before the session snapshot is taken.
-        if args.contains("-demoGate") || args.contains("-demoGateFlow") {
+        // Gate/peek demos need kid lock on before the session snapshot is
+        // taken (peeks are kid-lock-only under the Phase 8 night-panel spec).
+        if args.contains("-demoGate") || args.contains("-demoGateFlow") || args.contains("-demoPeekFlow") {
             settings.kidLockEnabled = true
-            log.notice("DEMO: kid lock forced on for gate demo")
+            log.notice("DEMO: kid lock forced on for gate/peek demo")
         }
         // Sound selection hooks (Phase 6): apply before any state hook so the
         // real start path picks up the chosen assets.
