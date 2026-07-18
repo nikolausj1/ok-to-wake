@@ -35,16 +35,25 @@ struct RootView: View {
         }
     }
 
-    /// Dev-only: `-demoLandscape` forces the scene to landscape so simctl
-    /// screenshots capture the primary design orientation without a tap.
+    /// Dev-only: `-demoLandscape` / `-demoPortrait` force the scene
+    /// orientation so simctl screenshots capture both orientations without a
+    /// rotation gesture (the sim scene otherwise keeps its last orientation).
     private func applyDemoOrientation() {
         #if DEBUG
-        guard ProcessInfo.processInfo.arguments.contains("-demoLandscape") else { return }
+        let args = ProcessInfo.processInfo.arguments
+        let target: UIInterfaceOrientationMask
+        if args.contains("-demoLandscape") {
+            target = .landscapeRight
+        } else if args.contains("-demoPortrait") {
+            target = .portrait
+        } else {
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             let scene = UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }
                 .first
-            scene?.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { _ in }
+            scene?.requestGeometryUpdate(.iOS(interfaceOrientations: target)) { _ in }
         }
         #endif
     }

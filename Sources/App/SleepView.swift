@@ -38,8 +38,13 @@ struct SleepView: View {
         return formatter
     }()
 
-    /// Battery-saver dark mode: fully black unless the kid tapped for a peek.
-    private var blackout: Bool { coordinator.batterySaverActive && !peekVisible }
+    /// Battery-saver dark mode: fully black unless the kid tapped for a peek,
+    /// or a parent has controls revealed (corner hold / passed gate) — the
+    /// controls must never be invisible while they're active, or an unplugged
+    /// session could not be ended from the UI.
+    private var blackout: Bool {
+        coordinator.batterySaverActive && !peekVisible && !controlsVisible
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -261,10 +266,28 @@ struct SleepView: View {
         if args.contains("-demoGateFlow") {
             runDemoGateFlow()
         }
+        if args.contains("-demoPeekFlow") {
+            runDemoPeekFlow()
+        }
         #endif
     }
 
     #if DEBUG
+    /// `-demoPeekFlow` (with -demoUnplugged -demoState sleep): scripted
+    /// battery-saver peek - tap at t+3 s (clock peeks ~10 s), confirm the
+    /// peek expired at t+15 s. Screenshots are timed externally.
+    private func runDemoPeekFlow() {
+        log.notice("DEMO peek flow: battery-saver black screen (batterySaver=\(coordinator.batterySaverActive))")
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            log.notice("DEMO: tap on black screen (expect ~10 s clock peek)")
+            handleTap()
+            log.notice("DEMO: peekVisible=\(peekVisible) after tap")
+            try? await Task.sleep(for: .seconds(12))
+            log.notice("DEMO: peek window over, peekVisible=\(peekVisible) (expect false, back to black)")
+        }
+    }
+
     private func runDemoGateFlow() {
         log.notice("DEMO gate flow: kid lock on, attempting a gated end-session")
         Task { @MainActor in

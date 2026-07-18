@@ -27,6 +27,16 @@ public struct HourMinute: Codable, Equatable, Hashable, CustomStringConvertible 
         return HourMinute(hour: total / 60, minute: total % 60)
     }
 
+    /// Whole minutes (ceiling) until the next occurrence of this wall-clock
+    /// time after `date` — the Home screen's "Green in Xh Ym" line. Ceiling so
+    /// 30 s out reads "0h 1m", never a premature "0h 0m"; at the exact target
+    /// instant the next occurrence is tomorrow (1440). Lives in the engine
+    /// layer so the smoke test covers midnight and AM/PM boundaries.
+    public func minutesUntilNextOccurrence(after date: Date, calendar: Calendar) -> Int {
+        let next = nextOccurrence(after: date, calendar: calendar)
+        return max(0, Int(ceil(next.timeIntervalSince(date) / 60)))
+    }
+
     /// The next occurrence of this wall-clock time strictly after `date`, in
     /// `calendar`'s time zone.
     ///

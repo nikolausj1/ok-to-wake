@@ -8,6 +8,7 @@ final class OrientationDelegate: NSObject, UIApplicationDelegate {
                      supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-demoLandscape") { return .landscape }
+        if ProcessInfo.processInfo.arguments.contains("-demoPortrait") { return .portrait }
         #endif
         return .all
     }

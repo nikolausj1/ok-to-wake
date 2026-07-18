@@ -28,6 +28,11 @@ struct SettingsView: View {
         }
         .safeAreaInset(edge: .top) { header }
         .preferredColorScheme(.dark)
+        // Presented as a fullScreenCover, which gets its own status bar
+        // visibility: keep it hidden like the rest of the app (no stray
+        // light when Settings is opened mid-session at night).
+        .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
         .onDisappear { audio.stopPreview() }
     }
 

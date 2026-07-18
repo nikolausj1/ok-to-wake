@@ -51,6 +51,11 @@ struct HomeView: View {
             if ProcessInfo.processInfo.arguments.contains("-demoSettings") {
                 showSettings = true
             }
+            // Phase 7: scripted Start tap (with -demoUnplugged this exercises
+            // the real charging-notice path for a screenshot).
+            if ProcessInfo.processInfo.arguments.contains("-demoTapStart") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { startTapped() }
+            }
             #endif
         }
     }
@@ -134,20 +139,24 @@ struct HomeView: View {
     }
 
     private func greenInText(at now: Date) -> String {
-        let wake = coordinator.settings.wakeTime.nextOccurrence(after: now, calendar: .current)
-        let mins = max(0, Int(ceil(wake.timeIntervalSince(now) / 60)))
+        let mins = coordinator.settings.wakeTime.minutesUntilNextOccurrence(after: now, calendar: .current)
         return "Green in \(mins / 60)h \(mins % 60)m"
     }
 
     // MARK: - Start + charging notice
 
+    /// The Start Night tap: straight in when charging, soft notice when not.
+    private func startTapped() {
+        if coordinator.isPluggedIn {
+            coordinator.startNight()
+        } else {
+            withAnimation(.easeInOut(duration: 0.25)) { showChargingNotice = true }
+        }
+    }
+
     private var startButton: some View {
         Button {
-            if coordinator.isPluggedIn {
-                coordinator.startNight()
-            } else {
-                withAnimation(.easeInOut(duration: 0.25)) { showChargingNotice = true }
-            }
+            startTapped()
         } label: {
             Text("Start Night")
                 .font(.system(size: 28, weight: .semibold, design: .rounded))

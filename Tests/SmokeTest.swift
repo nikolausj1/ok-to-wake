@@ -74,6 +74,30 @@ let exactStart = date(2026, 6, 2, 7, 0)
 check(seven.nextOccurrence(after: exactStart, calendar: cal(chicago)) == date(2026, 6, 3, 7, 0),
       "start exactly at wake time resolves to tomorrow")
 
+// "Green in Xh Ym" minutes (Phase 7: Home line correctness at boundaries)
+check(seven.minutesUntilNextOccurrence(after: bedtime, calendar: cal(chicago)) == 8 * 60 + 10,
+      "Green in: 10:50 PM → 7:00 = 490 min (8h 10m)")
+check(seven.minutesUntilNextOccurrence(after: earlyStart, calendar: cal(chicago)) == 10,
+      "Green in: 6:50 → 7:00 = 10 min (edge row 4 safeguard)")
+check(seven.minutesUntilNextOccurrence(after: exactStart, calendar: cal(chicago)) == 24 * 60,
+      "Green in: exactly at wake time = 1440 min (tomorrow)")
+check(seven.minutesUntilNextOccurrence(after: date(2026, 6, 2, 6, 59, 30), calendar: cal(chicago)) == 1,
+      "Green in: 30 s out ceils to 1 min, never 0h 0m early")
+// Midnight boundary: 11:59 PM → 12:05 AM wake crosses the date line
+let fiveAfterMidnight = HourMinute(hour: 0, minute: 5)
+check(fiveAfterMidnight.minutesUntilNextOccurrence(after: date(2026, 6, 1, 23, 59), calendar: cal(chicago)) == 6,
+      "Green in: 11:59 PM → 12:05 AM = 6 min across midnight")
+// AM/PM boundary: 11:30 AM with a 12:00 PM (noon) wake vs 12:00 AM (midnight)
+let noon = HourMinute(hour: 12, minute: 0)
+let midnight = HourMinute(hour: 0, minute: 0)
+check(noon.minutesUntilNextOccurrence(after: date(2026, 6, 2, 11, 30), calendar: cal(chicago)) == 30,
+      "Green in: 11:30 AM → 12:00 PM = 30 min (noon is PM)")
+check(midnight.minutesUntilNextOccurrence(after: date(2026, 6, 2, 11, 30), calendar: cal(chicago)) == 12 * 60 + 30,
+      "Green in: 11:30 AM → 12:00 AM = 750 min (midnight is AM)")
+// A PM wake set in the morning stays same-day (the AM/PM mistake made obvious)
+check(HourMinute(hour: 19, minute: 0).minutesUntilNextOccurrence(after: date(2026, 6, 2, 7, 10), calendar: cal(chicago)) == 11 * 60 + 50,
+      "Green in: 7:10 AM → 7:00 PM = 710 min (PM mistake reads huge)")
+
 // ─────────────────────────────────────────────────────────────
 // 2. AppSettings defaults, clamping, Codable
 // ─────────────────────────────────────────────────────────────

@@ -62,6 +62,9 @@ final class SessionCoordinator: ObservableObject {
     /// `.unknown` (simulator, undetectable hardware) is treated as plugged in
     /// so it never nags and never falsely blacks out the screen.
     var isPluggedIn: Bool {
+        #if DEBUG
+        if demoForceUnplugged { return false }
+        #endif
         switch UIDevice.current.batteryState {
         case .charging, .full: return true
         case .unplugged: return false
@@ -261,7 +264,24 @@ final class SessionCoordinator: ObservableObject {
     ///   -demoAlarmSound <id>         enable the alarm + select its asset
     ///                                (both for per-asset load/play log checks)
     ///
+    /// Phase 7 acceptance-pass hooks (sim can't tap or fake battery state):
+    ///   -demoUnplugged               force isPluggedIn == false (charging
+    ///                                notice + battery-saver paths)
+    ///   -demoPlugInAfter <secs>      clear the unplugged override after N s
+    ///                                (battery-saver -> dim clock restore)
+    ///   -demoWakeAt <HH:mm>          set the wake time (24 h); with -demoStart
+    ///                                also run the real Start path
+    ///   -demoNoiseOffset <min>       set the noise stop offset (clamped)
+    ///   -demoAlarmOffset <min>       enable the alarm + set its offset
+    ///   -demoEndAfter <secs>         call endSession() after N s (the Done /
+    ///                                End Session path, for log verification)
+    ///   -demoStopAlarmAfter <secs>   call stopAlarmTapped() after N s
+    ///   -demoState stalewake         synthetic session >3 h past wake ->
+    ///                                real recovery clears it (edge row 2)
+    ///
     /// Returns true when a hook took over the launch path (skips recovery).
+    private var demoForceUnplugged = false
+
     private func applyDemoLaunchArguments() -> Bool {
         let args = ProcessInfo.processInfo.arguments
         func value(after flag: String) -> String? {
@@ -284,21 +304,73 @@ final class SessionCoordinator: ObservableObject {
             settings.alarmSound = id
             log.notice("DEMO: -demoAlarmSound \(id, privacy: .public)")
         }
+        // Battery hooks: apply BEFORE any start path so batterySaverActive
+        // and the charging notice compute against the forced state.
+        if args.contains("-demoUnplugged") {
+            demoForceUnplugged = true
+            log.notice("DEMO: -demoUnplugged (isPluggedIn forced false)")
+        }
+        if let secsString = value(after: "-demoPlugInAfter"), let secs = TimeInterval(secsString), secs > 0 {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(secs))
+                self.demoForceUnplugged = false
+                self.log.notice("DEMO: plugged in after \(Int(secs))s")
+                self.batteryStateChanged()
+            }
+        }
+        // Offset hooks (acceptance: noise stop at -10 / 0 / +10, alarm offsets).
+        if let offString = value(after: "-demoNoiseOffset"), let off = Int(offString) {
+            settings.noiseStopOffsetMin = AppSettings.clampNoiseOffset(off)
+            log.notice("DEMO: -demoNoiseOffset \(self.settings.noiseStopOffsetMin)")
+        }
+        if let offString = value(after: "-demoAlarmOffset"), let off = Int(offString) {
+            settings.alarmEnabled = true
+            settings.alarmOffsetMin = AppSettings.clampAlarmOffset(off)
+            log.notice("DEMO: -demoAlarmOffset \(self.settings.alarmOffsetMin)")
+        }
+        // Scripted taps (simctl can't tap): Done/End Session and alarm stop.
+        if let secsString = value(after: "-demoEndAfter"), let secs = TimeInterval(secsString), secs > 0 {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(secs))
+                self.log.notice("DEMO: Done/End tapped after \(Int(secs))s")
+                self.endSession()
+            }
+        }
+        if let secsString = value(after: "-demoStopAlarmAfter"), let secs = TimeInterval(secsString), secs > 0 {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(secs))
+                self.log.notice("DEMO: alarm stop tap after \(Int(secs))s (alarmIsPlaying=\(self.audio.alarmIsPlaying))")
+                self.stopAlarmTapped()
+            }
+        }
+        // Explicit wake time (timezone relaunch test, edge row 4 screenshot).
+        if let hm = value(after: "-demoWakeAt") {
+            let parts = hm.split(separator: ":")
+            if parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]) {
+                settings.wakeTime = HourMinute(hour: h, minute: m)
+                log.notice("DEMO: -demoWakeAt \(hm, privacy: .public)")
+                store.clearActiveSession()
+                if args.contains("-demoStart") { startNight() }
+                return true
+            }
+        }
         if let state = value(after: "-demoState") {
             log.notice("DEMO: -demoState \(state, privacy: .public)")
             store.clearActiveSession()
             switch state {
             case "sleep":
                 startNight()                       // real path: persists, dims, starts noise
-            case "wake":
-                // Synthetic persisted session whose wake time passed an hour
-                // ago, then the real recovery path -> green, silent.
+            case "wake", "stalewake":
+                // Synthetic persisted session whose wake time passed 1 h ago
+                // ("wake" -> green, silent) or 4 h ago ("stalewake" -> real
+                // recovery clears the stale session, Home; edge row 2), then
+                // the real recovery path.
                 let now = Date()
                 var snapshot = settings
-                let target = now.addingTimeInterval(-3600)
+                let target = now.addingTimeInterval(state == "stalewake" ? -4 * 3600 : -3600)
                 let comps = Calendar.current.dateComponents([.hour, .minute], from: target)
                 snapshot.wakeTime = HourMinute(hour: comps.hour ?? 7, minute: comps.minute ?? 0)
-                let session = ActiveSession(startedAt: now.addingTimeInterval(-7200),
+                let session = ActiveSession(startedAt: target.addingTimeInterval(-3600),
                                             wakeDate: target,
                                             settingsSnapshot: snapshot,
                                             priorBrightness: display.currentBrightness)
