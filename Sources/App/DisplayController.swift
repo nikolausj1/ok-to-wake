@@ -10,6 +10,8 @@ import os
 final class DisplayController: ObservableObject {
     /// Night-level brightness for the sleep state; Phase 3's design pass may tune it.
     static let nightBrightness: CGFloat = 0.1
+    /// Wake (green) state brightness - loud, visually (PRD C).
+    static let wakeBrightness: CGFloat = 0.8
 
     private let log = Logger(subsystem: "com.levelup.oktowake", category: "display")
 
@@ -39,7 +41,16 @@ final class DisplayController: ObservableObject {
     /// Wake (green) state: bright, but the idle timer stays disabled until the
     /// session is dismissed (green persists until Done - PRD C).
     func enterWakeBrightness() {
-        UIScreen.main.brightness = 0.8
+        UIScreen.main.brightness = Self.wakeBrightness
         log.notice("wake state: brightness raised")
+    }
+
+    /// Relaunch recovery straight into the green state (PRD edge row 2): the
+    /// session is still logically running until Done, so keep the device
+    /// awake and go bright.
+    func resumeSessionInWake() {
+        UIApplication.shared.isIdleTimerDisabled = true
+        UIScreen.main.brightness = Self.wakeBrightness
+        log.notice("session resumed in wake state: idle timer disabled, bright")
     }
 }

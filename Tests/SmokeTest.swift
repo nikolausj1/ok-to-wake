@@ -44,6 +44,17 @@ check(HourMinute(hour: 7, minute: 75).minute == 59, "HourMinute clamps minute hi
 check(HourMinute(hour: 7, minute: -5).minute == 0, "HourMinute clamps minute low")
 check(HourMinute(hour: 7, minute: 0).description == "07:00", "HourMinute description")
 
+// 12-hour display + minute offsets (Phase 3 UI labels: wake time, "Alarm at 7:10")
+check(HourMinute(hour: 7, minute: 0).display12h == "7:00 AM", "display12h morning")
+check(HourMinute(hour: 0, minute: 5).display12h == "12:05 AM", "display12h midnight hour")
+check(HourMinute(hour: 12, minute: 0).display12h == "12:00 PM", "display12h noon")
+check(HourMinute(hour: 19, minute: 30).display12h == "7:30 PM", "display12h evening")
+check(HourMinute(hour: 7, minute: 0).adding(minutes: 10) == HourMinute(hour: 7, minute: 10), "adding minutes simple")
+check(HourMinute(hour: 6, minute: 55).adding(minutes: 10) == HourMinute(hour: 7, minute: 5), "adding minutes crosses hour")
+check(HourMinute(hour: 23, minute: 55).adding(minutes: 10) == HourMinute(hour: 0, minute: 5), "adding minutes wraps midnight")
+check(HourMinute(hour: 0, minute: 0).adding(minutes: -5) == HourMinute(hour: 23, minute: 55), "negative offset wraps back")
+check(HourMinute(hour: 7, minute: 0).adding(minutes: 0) == HourMinute(hour: 7, minute: 0), "zero offset is identity")
+
 let seven = HourMinute(hour: 7, minute: 0)
 
 // Overnight: start 10:50 PM, wake 7:00 → 7:00 AM tomorrow (PRD locked rule)

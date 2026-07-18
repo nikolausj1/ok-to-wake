@@ -39,6 +39,10 @@ targets:
         UIBackgroundModes:
           - audio
         UILaunchScreen: {}
+        # The app owns the whole screen all night (PRD B); full-screen (no
+        # iPad multitasking) also lets the dev -demoLandscape orientation
+        # hook work for sim screenshots.
+        UIRequiresFullScreen: true
         UIApplicationSupportsIndirectInputEvents: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

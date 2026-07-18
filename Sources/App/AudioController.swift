@@ -224,4 +224,13 @@ enum SoundLibrary {
     static func url(forAssetID id: String) -> URL? {
         Bundle.main.url(forResource: id, withExtension: "caf")
     }
+
+    /// Human-readable names for the pickers and the Home secondary row.
+    static func displayName(forAssetID id: String) -> String {
+        switch id {
+        case "classicWhite": return "Classic White"
+        case "gentleChime": return "Gentle Chime"
+        default: return id
+        }
+    }
 }

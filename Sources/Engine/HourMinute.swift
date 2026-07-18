@@ -14,6 +14,19 @@ public struct HourMinute: Codable, Equatable, Hashable, CustomStringConvertible 
 
     public var description: String { String(format: "%02d:%02d", hour, minute) }
 
+    /// 12-hour display, e.g. "7:00 AM" (the app is 12-hour everywhere - PRD A).
+    public var display12h: String {
+        let h = ((hour + 11) % 12) + 1
+        return String(format: "%d:%02d %@", h, minute, hour < 12 ? "AM" : "PM")
+    }
+
+    /// The wall-clock time this many minutes later (or earlier, if negative),
+    /// wrapping around midnight. Used for offset labels like "Alarm at 7:10".
+    public func adding(minutes: Int) -> HourMinute {
+        let total = ((hour * 60 + minute + minutes) % 1440 + 1440) % 1440
+        return HourMinute(hour: total / 60, minute: total % 60)
+    }
+
     /// The next occurrence of this wall-clock time strictly after `date`, in
     /// `calendar`'s time zone.
     ///
