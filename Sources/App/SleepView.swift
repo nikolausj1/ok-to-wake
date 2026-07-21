@@ -30,7 +30,32 @@ struct SleepView: View {
     @State private var showSettings = false
     @State private var gateVisible = false
 
+    // Quick-gesture state (Phase 9 item 4). Axis is locked once per drag from
+    // the dominant direction at the start; the baselines are captured then so
+    // the whole drag is measured from where it began.
+    private enum DragAxis { case horizontal, vertical }
+    @State private var dragAxis: DragAxis?
+    @State private var dragStartVolume: Double = 0
+    @State private var dragStartBrightness: Double = 0
+    @State private var indicator: GestureIndicator?
+    @State private var hideIndicatorTask: Task<Void, Never>?
+
+    /// A minimal, dim, ephemeral readout shown only while a quick-gesture is in
+    /// flight (no menu, no brightening). `fraction` is 0...1 for the bar.
+    private struct GestureIndicator: Equatable {
+        enum Kind { case volume, brightness }
+        var kind: Kind
+        var fraction: Double
+    }
+
     private let log = Logger(subsystem: "com.levelup.oktowake", category: "gate")
+
+    // Quick-gesture tuning (Phase 9 item 4). Movement below the tap threshold
+    // on release is a tap (opens the panel); the axis-start threshold is how
+    // far the finger travels before an axis is committed. Both are small so a
+    // gentle nudge registers, per the sensitivity requirement.
+    private static let tapThreshold: CGFloat = 12
+    private static let axisStartThreshold: CGFloat = 8
 
     /// How long the panel stays up: a plain tap vs a passed parent gate
     /// (PRD E: ~15 s).
@@ -65,7 +90,10 @@ struct SleepView: View {
                         Text(Self.clockFormatter.string(from: context.date))
                             .font(.system(size: clockSize(geo), weight: .semibold, design: .rounded))
                             .monospacedDigit()
-                            .foregroundStyle(Theme.textPrimary.opacity(0.55))
+                            // Dim clock color follows the persisted clockColor
+                            // toggle (Phase 9 item 2). The dim values already
+                            // bake in the night dimness - no extra opacity.
+                            .foregroundStyle(Theme.dimClock(coordinator.settings.clockColor))
                     }
                     // The "still sleeping" cue is the primary signal for a
                     // pre-reader across a dark room: a BIG moon, ~30% of the
@@ -93,6 +121,13 @@ struct SleepView: View {
                     .padding(28)
                 }
 
+                // Minimal ephemeral quick-gesture indicator (Phase 9 item 4):
+                // a small dim bar, dark-respecting, no menu. Hidden in blackout
+                // (gestures are disabled there) and while the panel is up.
+                if let indicator, !blackout, !panelVisible {
+                    gestureIndicatorView(indicator, geo: geo)
+                }
+
                 if panelVisible { controlsPanel }
 
                 // Invisible bottom-right corner region: press-and-hold ~3 s is
@@ -107,7 +142,19 @@ struct SleepView: View {
                 }
             }
             .contentShape(Rectangle())
+            // Taps (open the panel / dismiss / kid-lock peek) stay on their own
+            // tap gesture - this is the proven behavior that coexists with the
+            // panel's buttons and sliders (they take priority in their region).
             .onTapGesture(perform: handleTap)
+            // Quick nudges are a SEPARATE drag gesture gated by a minimum
+            // distance (Phase 9 item 4): movements below `tapThreshold` never
+            // start it, so a tap is unambiguously a tap; only a real drag
+            // adjusts volume/brightness. It never opens or dismisses the panel.
+            .gesture(
+                DragGesture(minimumDistance: Self.tapThreshold)
+                    .onChanged { handleDragChanged($0.translation, viewSize: geo.size) }
+                    .onEnded { _ in handleDragEnded() }
+            )
             .animation(.easeInOut(duration: 0.8), value: blackout)
             .animation(.easeInOut(duration: 0.8), value: panelVisible)
             .animation(.easeInOut(duration: 0.3), value: gateVisible)
@@ -143,6 +190,10 @@ struct SleepView: View {
         }
         // Any panel interaction resets the fade timer (volume drags included).
         .onChange(of: coordinator.settings.whiteNoiseVolume) { _, _ in
+            if panelVisible { scheduleHidePanel(after: Self.panelRevealSeconds) }
+        }
+        // Brightness-slider drags keep the panel up too (item 2 live preview).
+        .onChange(of: coordinator.settings.nightBrightness) { _, _ in
             if panelVisible { scheduleHidePanel(after: Self.panelRevealSeconds) }
         }
     }
@@ -200,6 +251,112 @@ struct SleepView: View {
         .ignoresSafeArea()
     }
 
+    // MARK: - Quick gestures (Phase 9 item 4)
+
+    /// Quick gestures run ONLY in normal dim sleep with nothing else up: kid
+    /// lock off, no panel/gate, not in battery-saver blackout (the black screen
+    /// has nothing to nudge, and a tap there opens the panel instead).
+    private var quickGesturesEnabled: Bool {
+        !panelVisible && !gateVisible
+            && !coordinator.settings.kidLockEnabled
+            && !coordinator.batterySaverActive
+    }
+
+    /// Live drag. Axis is locked from the dominant direction once travel passes
+    /// `axisStartThreshold`, and the volume/brightness baselines are captured at
+    /// that instant so the whole drag measures from where it started. Sensitivity
+    /// (item 4): a full view-height drag spans the whole volume range, a full
+    /// view-width drag the whole brightness range - measured off the real view
+    /// size (GeometryReader), so landscape and portrait both feel right.
+    private func handleDragChanged(_ translation: CGSize, viewSize: CGSize) {
+        guard quickGesturesEnabled else { return }
+        if dragAxis == nil {
+            guard abs(translation.width) > Self.axisStartThreshold
+                    || abs(translation.height) > Self.axisStartThreshold else { return }
+            dragAxis = abs(translation.width) > abs(translation.height) ? .horizontal : .vertical
+            dragStartVolume = coordinator.settings.whiteNoiseVolume
+            dragStartBrightness = coordinator.settings.nightBrightness
+            hideIndicatorTask?.cancel()
+        }
+        switch dragAxis {
+        case .vertical:
+            // Up (negative height) = louder.
+            let delta = Double(-translation.height / max(viewSize.height, 1))
+            let volume = min(max(dragStartVolume + delta, 0), 1)
+            applyVolume(volume)
+            indicator = GestureIndicator(kind: .volume, fraction: volume)
+        case .horizontal:
+            // Right (positive width) = brighter.
+            let range = AppSettings.nightBrightnessRange
+            let span = range.upperBound - range.lowerBound
+            let delta = Double(translation.width / max(viewSize.width, 1)) * span
+            let brightness = min(max(dragStartBrightness + delta, range.lowerBound), range.upperBound)
+            applyNightBrightness(brightness)
+            indicator = GestureIndicator(kind: .brightness,
+                                         fraction: (brightness - range.lowerBound) / span)
+        case .none:
+            break
+        }
+    }
+
+    private func handleDragEnded() {
+        // Taps are handled by the separate tap gesture; this only ends a real
+        // drag (or a suppressed one, where dragAxis stayed nil - a harmless
+        // no-op). Never opens or dismisses the panel.
+        dragAxis = nil
+        scheduleHideIndicator()
+    }
+
+    /// Live volume from a nudge or the panel slider: drive the player and
+    /// persist (the coordinator's `settings` didSet does both).
+    private func applyVolume(_ volume: Double) {
+        coordinator.settings.whiteNoiseVolume = min(max(volume, 0), 1)
+    }
+
+    /// Live brightness from a nudge or the panel slider: set the screen NOW for
+    /// a true preview, and persist as `nightBrightness` so the dim state uses it
+    /// when the panel/gesture settles back.
+    private func applyNightBrightness(_ brightness: Double) {
+        let clamped = AppSettings.clampNightBrightness(brightness)
+        coordinator.settings.nightBrightness = clamped   // persists + syncs display
+        display.previewNightBrightness(clamped)          // live UIScreen preview
+    }
+
+    private func scheduleHideIndicator() {
+        hideIndicatorTask?.cancel()
+        hideIndicatorTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.9))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.4)) { indicator = nil }
+        }
+    }
+
+    /// The minimal dim indicator: a short bar plus a small glyph, bottom-center,
+    /// dark enough not to light the room. No text menu (item 4).
+    private func gestureIndicatorView(_ indicator: GestureIndicator, geo: GeometryProxy) -> some View {
+        let barWidth = min(geo.size.width * 0.34, 260)
+        let glyph = indicator.kind == .volume ? "speaker.wave.2.fill" : "sun.max.fill"
+        return VStack {
+            Spacer()
+            HStack(spacing: 12) {
+                Image(systemName: glyph)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.textMuted.opacity(0.7))
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(width: barWidth, height: 6)
+                    Capsule()
+                        .fill(Color.white.opacity(0.5))
+                        .frame(width: max(6, barWidth * indicator.fraction), height: 6)
+                }
+            }
+            .padding(.bottom, geo.size.height * 0.16)
+        }
+        .transition(.opacity)
+        .allowsHitTesting(false)
+    }
+
     // MARK: - Parent gate outcomes (PRD E)
 
     private func gateSucceeded() {
@@ -252,27 +409,127 @@ struct SleepView: View {
         coordinator.endSession()
     }
 
+    /// Panel-clock formatter for the "Green at 7:00 AM" rows: 12-hour with AM/PM
+    /// and no seconds (real clock times, not offsets - Phase 9 item 2).
+    private func timeRows() -> [(icon: String, label: String)] {
+        guard let session = coordinator.activeSession else { return [] }
+        var rows: [(String, String)] = [
+            ("sunrise.fill", "Green at \(Engine.wakeWallClock(for: session).display12h)")
+        ]
+        if let noise = Engine.noiseStopWallClock(for: session) {
+            rows.append(("speaker.slash.fill", "Noise stops \(noise.display12h)"))
+        }
+        if let alarm = Engine.alarmStartWallClock(for: session) {
+            rows.append(("alarm.fill", "Alarm \(alarm.display12h)"))
+        }
+        return rows
+    }
+
+    private var clockColorLabel: String {
+        switch coordinator.settings.clockColor {
+        case .white: return "White"
+        case .orange: return "Orange"
+        case .red: return "Red"
+        }
+    }
+
+    /// Cycle the dim clock color White -> Orange -> Red (Phase 9 item 2),
+    /// persisting it, and keep the panel up (this is an interaction).
+    private func cycleClockColor() {
+        let next = coordinator.settings.clockColor.next
+        coordinator.settings.clockColor = next
+        log.notice("night panel: clock color -> \(next.rawValue, privacy: .public)")
+        if panelVisible { scheduleHidePanel(after: Self.panelRevealSeconds) }
+    }
+
     private var controlsPanel: some View {
         VStack {
             Spacer()
-            VStack(spacing: 20) {
+            VStack(spacing: 18) {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(Self.clockFormatter.string(from: context.date))
                         .font(.system(size: 34, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(Theme.textPrimary)
                 }
+
+                // Real clock times for the scheduled events (item 2).
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(timeRows(), id: \.label) { row in
+                        HStack(spacing: 10) {
+                            Image(systemName: row.icon)
+                                .font(.system(size: 13))
+                                .foregroundStyle(Theme.textMuted)
+                                .frame(width: 20)
+                            Text(row.label)
+                                .font(.system(.subheadline, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(Theme.textPrimary)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .frame(maxWidth: 320, alignment: .leading)
+
+                // Volume: the single in-app knob (item 3).
+                VStack(spacing: 4) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "speaker.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.textMuted)
+                        Slider(value: $coordinator.settings.whiteNoiseVolume, in: 0...1)
+                            .tint(Theme.textPrimary)
+                            .frame(minWidth: 180, maxWidth: 320)
+                        Image(systemName: "speaker.wave.3.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.textMuted)
+                    }
+                    Text("Phone buttons still work too.")
+                        .font(.system(.caption2, design: .rounded))
+                        .foregroundStyle(Theme.textMuted)
+                }
+
+                // Brightness with LIVE preview (item 2): dragging sets the
+                // screen in real time; the value persists as nightBrightness.
                 HStack(spacing: 12) {
-                    Image(systemName: "speaker.fill")
+                    Image(systemName: "sun.min.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.textMuted)
-                    Slider(value: $coordinator.settings.whiteNoiseVolume, in: 0...1)
+                    Slider(value: Binding(get: { coordinator.settings.nightBrightness },
+                                          set: { applyNightBrightness($0) }),
+                           in: AppSettings.nightBrightnessRange)
                         .tint(Theme.textPrimary)
                         .frame(minWidth: 180, maxWidth: 320)
-                    Image(systemName: "speaker.wave.3.fill")
+                    Image(systemName: "sun.max.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.textMuted)
                 }
+
+                // Clock color toggle: White / Orange / Red (item 2).
+                Button(action: cycleClockColor) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "clock.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.textMuted)
+                        Text("Clock color")
+                            .font(.system(.subheadline, design: .rounded))
+                            .foregroundStyle(Theme.textPrimary)
+                        Spacer(minLength: 12)
+                        Text(clockColorLabel)
+                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                            .foregroundStyle(Theme.dimClock(coordinator.settings.clockColor))
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textMuted)
+                    }
+                    .frame(maxWidth: 320)
+                    .frame(height: 40)
+                    .padding(.horizontal, 14)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+
                 HStack(spacing: 16) {
                     Button(action: endSessionFromPanel) {
                         Text("End Session")
@@ -302,7 +559,7 @@ struct SleepView: View {
             .background(Theme.panel)   // sharp-cornered panel (Section 7)
             // The panel itself absorbs taps and treats them as interaction
             // (resets the fade timer); taps outside it fall through to the
-            // screen-level handleTap, which dismisses immediately.
+            // screen-level handler, which dismisses immediately.
             .contentShape(Rectangle())
             .onTapGesture { scheduleHidePanel(after: Self.panelRevealSeconds) }
             .padding(.bottom, 44)
@@ -328,9 +585,23 @@ struct SleepView: View {
     ///                  the coordinator hook - peeks are kid-lock-only now)
     /// `-demoPanelFlow` scripted night-panel walk: tap -> bright panel, 10 s
     ///                  auto-fade, tap -> outside-tap dismiss, End Session
+    ///
+    /// Phase 9 hooks (simctl can't multi-touch drag) - all invoke the SAME
+    /// gesture/handler code the real UI uses:
+    /// `-demoPanel`           open the panel and hold it for a screenshot
+    /// `-demoNudgeVolume`     simulate an up vertical-drag; logs before/after
+    ///                        volume and that the panel did NOT open (also the
+    ///                        kid-lock-suppressed case when -demoKidLock is set)
+    /// `-demoNudgeBrightness` simulate a right horizontal-drag; logs before/after
+    ///                        nightBrightness + UIScreen.brightness + no panel
+    /// `-demoClockColor <c>`  set the dim clock color (white|orange|red)
     private func applyDemoHooks() {
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
+        func value(after flag: String) -> String? {
+            guard let i = args.firstIndex(of: flag), args.indices.contains(i + 1) else { return nil }
+            return args[i + 1]
+        }
         if args.contains("-demoGate") {
             gateVisible = true
         }
@@ -343,8 +614,72 @@ struct SleepView: View {
         if args.contains("-demoPanelFlow") {
             runDemoPanelFlow()
         }
+        if let color = value(after: "-demoClockColor"), let c = ClockColor(rawValue: color) {
+            coordinator.settings.clockColor = c
+            log.notice("DEMO: -demoClockColor \(c.rawValue, privacy: .public)")
+        }
+        if args.contains("-demoPanel") {
+            runDemoPanel()
+        }
+        if args.contains("-demoNudgeVolume") {
+            runDemoNudgeVolume()
+        }
+        if args.contains("-demoNudgeBrightness") {
+            runDemoNudgeBrightness()
+        }
         #endif
     }
+
+    #if DEBUG
+    /// A representative iPad-landscape view size for the scripted drags (the
+    /// live gestures use the real GeometryReader size; the demos only need a
+    /// plausible extent to exercise the same math).
+    private func demoViewSize() -> CGSize { CGSize(width: 1366, height: 1024) }
+
+    /// `-demoPanel`: open the panel and keep it up long enough to screenshot.
+    private func runDemoPanel() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            log.notice("DEMO: open night panel for screenshot")
+            showPanel(for: 3600)   // effectively no auto-fade during the shot
+        }
+    }
+
+    /// `-demoNudgeVolume`: run the SAME drag handlers as a finger would, with an
+    /// up (louder) vertical translation. Proves volume changes WITHOUT opening
+    /// the panel (and, with -demoKidLock, that the gesture is suppressed).
+    private func runDemoNudgeVolume() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            let size = demoViewSize()
+            let before = coordinator.settings.whiteNoiseVolume
+            log.notice("DEMO nudgeVolume: before=\(before, format: .fixed(precision: 2)) kidLock=\(coordinator.settings.kidLockEnabled) panelVisible=\(panelVisible)")
+            // Vertical, upward = +40% of range; two changes then release.
+            let t = CGSize(width: 2, height: -size.height * 0.4)
+            handleDragChanged(t, viewSize: size)
+            handleDragChanged(t, viewSize: size)
+            handleDragEnded()
+            log.notice("DEMO nudgeVolume: after=\(coordinator.settings.whiteNoiseVolume, format: .fixed(precision: 2)) panelVisible=\(panelVisible) (expect louder + panel false; unchanged if kid lock)")
+        }
+    }
+
+    /// `-demoNudgeBrightness`: same handlers with a right (brighter) horizontal
+    /// translation. Proves nightBrightness + the live screen change, no panel.
+    private func runDemoNudgeBrightness() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            let size = demoViewSize()
+            let before = coordinator.settings.nightBrightness
+            let screenBefore = Double(UIScreen.main.brightness)
+            log.notice("DEMO nudgeBrightness: before nightBrightness=\(before, format: .fixed(precision: 2)) screen=\(screenBefore, format: .fixed(precision: 2)) panelVisible=\(panelVisible)")
+            let t = CGSize(width: size.width * 0.4, height: 2)
+            handleDragChanged(t, viewSize: size)
+            handleDragChanged(t, viewSize: size)
+            handleDragEnded()
+            log.notice("DEMO nudgeBrightness: after nightBrightness=\(coordinator.settings.nightBrightness, format: .fixed(precision: 2)) screen=\(Double(UIScreen.main.brightness), format: .fixed(precision: 2)) panelVisible=\(panelVisible) (expect brighter + panel false)")
+        }
+    }
+    #endif
 
     #if DEBUG
     /// `-demoPanelFlow` (optionally with -demoUnplugged): tap at t+2 (panel

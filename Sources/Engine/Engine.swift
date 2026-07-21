@@ -140,6 +140,36 @@ public enum Engine {
         return effects
     }
 
+    // MARK: - Panel actual-time accessors (Phase 9 night controls, item 2)
+
+    // The night panel shows REAL wall-clock times, not offsets. These derive
+    // from the session's resolved wake time (its snapshot's `wakeTime`, which
+    // live edits mid-session keep current) plus each event's offset, honoring
+    // the enabled flags. Pure wall-clock arithmetic (HourMinute.adding wraps
+    // midnight), so the smoke test can cover midnight / AM-PM boundaries with
+    // no dates or time zones. The app layer formats these as "7:00 AM".
+
+    /// The wall-clock time the screen turns green ("Green at 7:00 AM").
+    public static func wakeWallClock(for session: ActiveSession) -> HourMinute {
+        session.settingsSnapshot.wakeTime
+    }
+
+    /// noiseStopAt = wake + noiseOffset, or nil when white noise or its stop is
+    /// disabled ("Noise stops 6:50 AM").
+    public static func noiseStopWallClock(for session: ActiveSession) -> HourMinute? {
+        let s = session.settingsSnapshot
+        guard s.whiteNoiseEnabled, s.noiseStopEnabled else { return nil }
+        return s.wakeTime.adding(minutes: s.noiseStopOffsetMin)
+    }
+
+    /// alarmStartAt = wake + alarmOffset, or nil when the alarm is off
+    /// ("Alarm 7:10 AM").
+    public static func alarmStartWallClock(for session: ActiveSession) -> HourMinute? {
+        let s = session.settingsSnapshot
+        guard s.alarmEnabled else { return nil }
+        return s.wakeTime.adding(minutes: s.alarmOffsetMin)
+    }
+
     // MARK: - Alarm stopping
 
     /// Tap anywhere while the alarm sounds: stop it (green screen persists).

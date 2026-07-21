@@ -8,8 +8,14 @@ import os
 /// (PRD Section 8 + Risks).
 @MainActor
 final class DisplayController: ObservableObject {
-    /// Night-level brightness for the sleep state; Phase 3's design pass may tune it.
-    static let nightBrightness: CGFloat = 0.1
+    /// Night-level brightness for the sleep state (Phase 9 item 1). Backed by
+    /// the persisted `AppSettings.nightBrightness`; SessionCoordinator keeps
+    /// this in sync so `beginSession()` and `returnToNight()` always dim to the
+    /// user's chosen level (the old hardcoded 0.1 was too dark to read from
+    /// bed). Clamped to the legal night range.
+    var nightBrightness: CGFloat = 0.28 {
+        didSet { nightBrightness = min(max(nightBrightness, 0.05), 0.6) }
+    }
     /// Wake (green) state brightness - loud, visually (PRD C).
     static let wakeBrightness: CGFloat = 0.8
 
@@ -25,8 +31,8 @@ final class DisplayController: ObservableObject {
     /// first, then act - callers capture via `currentBrightness` first).
     func beginSession() {
         UIApplication.shared.isIdleTimerDisabled = true
-        setBrightness(Self.nightBrightness)
-        log.notice("session display begin: idle timer disabled, brightness -> \(Self.nightBrightness, format: .fixed(precision: 2))")
+        setBrightness(nightBrightness)
+        log.notice("session display begin: idle timer disabled, brightness -> \(self.nightBrightness, format: .fixed(precision: 2))")
     }
 
     /// What ActiveSession.priorBrightness should be set to at Start.
@@ -70,10 +76,20 @@ final class DisplayController: ObservableObject {
     }
 
     /// Panel hidden (auto-fade or outside tap): ramp back down to the night
-    /// level. Never called outside the sleep state.
+    /// level (the user's persisted `nightBrightness`). Never called outside the
+    /// sleep state.
     func returnToNight() {
-        log.notice("night controls hidden: brightness ramp -> night \(Self.nightBrightness, format: .fixed(precision: 2))")
-        ramp(to: Self.nightBrightness)
+        log.notice("night controls hidden: brightness ramp -> night \(self.nightBrightness, format: .fixed(precision: 2))")
+        ramp(to: nightBrightness)
+    }
+
+    /// Live brightness preview while dragging the panel's brightness slider or
+    /// the horizontal quick-gesture (Phase 9 items 2 & 4): set the screen
+    /// immediately (no ramp) so the user sees the exact result of the drag.
+    /// The value is persisted separately as `nightBrightness`; on panel dismiss
+    /// `returnToNight()` settles the screen there.
+    func previewNightBrightness(_ value: Double) {
+        setBrightness(CGFloat(min(max(value, 0.05), 0.6)))
     }
 
     /// Hard set (session begin/end, wake): cancel any in-flight ramp so a

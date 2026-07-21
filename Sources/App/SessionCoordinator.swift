@@ -30,6 +30,11 @@ final class SessionCoordinator: ObservableObject {
             store.settings = settings
             audio.setNoiseVolume(settings.whiteNoiseVolume)
             audio.setAlarmVolume(settings.alarmVolume)
+            // Keep the display's night level in lockstep with the setting so
+            // `returnToNight()` always settles at the user's chosen brightness
+            // (Phase 9 item 1). Live UIScreen preview during a drag is handled
+            // by the view via `display.previewNightBrightness`.
+            display.nightBrightness = CGFloat(settings.nightBrightness)
             if var session = activeSession {
                 session.settingsSnapshot = settings
                 activeSession = session
@@ -52,6 +57,7 @@ final class SessionCoordinator: ObservableObject {
         self.display = display
         self.store = store
         self.settings = store.settings
+        display.nightBrightness = CGFloat(store.settings.nightBrightness)
         UIDevice.current.isBatteryMonitoringEnabled = true
         NotificationCenter.default.addObserver(forName: UIDevice.batteryStateDidChangeNotification,
                                                object: nil,
@@ -266,6 +272,8 @@ final class SessionCoordinator: ObservableObject {
     ///   -demoSettings                handled in HomeView (opens Settings)
     ///   -demoGate / -demoGateFlow    handled here (kid lock on) + SleepView
     ///                                (gate overlay / scripted gated end-session)
+    ///   -demoKidLock                 force kid lock on (Phase 9: prove quick
+    ///                                gestures are suppressed under kid lock)
     ///   -demoNoiseSound <id>         select the white noise asset first
     ///   -demoAlarmSound <id>         enable the alarm + select its asset
     ///                                (both for per-asset load/play log checks)
@@ -296,9 +304,10 @@ final class SessionCoordinator: ObservableObject {
         }
         // Gate/peek demos need kid lock on before the session snapshot is
         // taken (peeks are kid-lock-only under the Phase 8 night-panel spec).
-        if args.contains("-demoGate") || args.contains("-demoGateFlow") || args.contains("-demoPeekFlow") {
+        if args.contains("-demoGate") || args.contains("-demoGateFlow")
+            || args.contains("-demoPeekFlow") || args.contains("-demoKidLock") {
             settings.kidLockEnabled = true
-            log.notice("DEMO: kid lock forced on for gate/peek demo")
+            log.notice("DEMO: kid lock forced on for gate/peek/gesture-suppression demo")
         }
         // Sound selection hooks (Phase 6): apply before any state hook so the
         // real start path picks up the chosen assets.

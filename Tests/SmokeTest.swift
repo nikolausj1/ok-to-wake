@@ -380,6 +380,136 @@ check(dstSeven == date(2026, 3, 8, 7, 0), "7:00 wake across spring-forward is 7:
 check(dstSeven.timeIntervalSince(dstEve) == 8 * hour, "10 PM CST → 7:00 CDT is 8 real hours (short night)")
 
 // ─────────────────────────────────────────────────────────────
+// 14. Phase 9: nightBrightness + clockColor settings
+// ─────────────────────────────────────────────────────────────
+
+check(defaults.nightBrightness == 0.28, "default nightBrightness 0.28")
+check(defaults.clockColor == .white, "default clockColor white")
+check(AppSettings(nightBrightness: 0.0).nightBrightness == 0.05, "nightBrightness clamps to 0.05 floor")
+check(AppSettings(nightBrightness: 0.9).nightBrightness == 0.6, "nightBrightness clamps to 0.6 ceiling")
+check(AppSettings(nightBrightness: 0.28).nightBrightness == 0.28, "nightBrightness in range preserved")
+check(AppSettings.clampNightBrightness(-1) == 0.05, "clampNightBrightness floor")
+check(AppSettings.clampNightBrightness(2) == 0.6, "clampNightBrightness ceiling")
+
+check(ClockColor.white.next == .orange, "clock color cycles white -> orange")
+check(ClockColor.orange.next == .red, "clock color cycles orange -> red")
+check(ClockColor.red.next == .white, "clock color cycles red -> white")
+
+do {
+    let custom = AppSettings(nightBrightness: 0.15, clockColor: .red)
+    let data = try JSONEncoder().encode(custom)
+    let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+    check(decoded == custom, "AppSettings Codable round-trip preserves nightBrightness + clockColor")
+    check(decoded.nightBrightness == 0.15, "round-trip preserves nightBrightness")
+    check(decoded.clockColor == .red, "round-trip preserves clockColor")
+} catch {
+    check(false, "Phase 9 settings Codable threw: \(error)")
+}
+
+// Backward compatibility: settings persisted BEFORE Phase 9 have no
+// nightBrightness / clockColor keys. They must decode to the defaults, NOT
+// fail the whole struct (which would reset every setting for existing users).
+do {
+    let legacy = """
+    {"wakeTime":{"hour":6,"minute":45},"whiteNoiseEnabled":true,"whiteNoiseSound":"rain",\
+    "whiteNoiseVolume":0.7,"noiseStopEnabled":true,"noiseStopOffsetMin":-15,\
+    "alarmEnabled":true,"alarmSound":"gentleChime","alarmVolume":0.6,"alarmOffsetMin":10,\
+    "kidLockEnabled":true}
+    """
+    let decoded = try JSONDecoder().decode(AppSettings.self, from: Data(legacy.utf8))
+    check(decoded.wakeTime == HourMinute(hour: 6, minute: 45), "legacy decode preserves wakeTime")
+    check(decoded.whiteNoiseSound == "rain", "legacy decode preserves whiteNoiseSound")
+    check(decoded.kidLockEnabled == true, "legacy decode preserves kidLockEnabled")
+    check(decoded.nightBrightness == 0.28, "legacy decode fills nightBrightness default")
+    check(decoded.clockColor == .white, "legacy decode fills clockColor default")
+} catch {
+    check(false, "legacy AppSettings decode threw (would reset user settings): \(error)")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 15. Phase 9: panel actual-time accessors (item 2)
+//     Real 12h clock times = wake +/- offset, honoring enabled flags,
+//     including midnight and AM/PM boundary crossings.
+// ─────────────────────────────────────────────────────────────
+
+func session(_ settings: AppSettings) -> ActiveSession {
+    ActiveSession(startedAt: bedtime,
+                  wakeDate: bedtime,
+                  settingsSnapshot: settings,
+                  priorBrightness: 0.5)
+}
+
+// Simple case: wake 7:00, noise -10, alarm +10.
+let panelSimple = session(AppSettings(wakeTime: HourMinute(hour: 7, minute: 0),
+                                      noiseStopOffsetMin: -10,
+                                      alarmEnabled: true,
+                                      alarmOffsetMin: 10))
+check(Engine.wakeWallClock(for: panelSimple) == HourMinute(hour: 7, minute: 0), "wakeWallClock is the wake time")
+check(Engine.wakeWallClock(for: panelSimple).display12h == "7:00 AM", "wake row reads 7:00 AM")
+check(Engine.noiseStopWallClock(for: panelSimple) == HourMinute(hour: 6, minute: 50), "noiseStop = wake -10 = 6:50")
+check(Engine.noiseStopWallClock(for: panelSimple)?.display12h == "6:50 AM", "noise row reads 6:50 AM")
+check(Engine.alarmStartWallClock(for: panelSimple) == HourMinute(hour: 7, minute: 10), "alarmStart = wake +10 = 7:10")
+check(Engine.alarmStartWallClock(for: panelSimple)?.display12h == "7:10 AM", "alarm row reads 7:10 AM")
+
+// Enabled flags: noise off / noise-stop off / alarm off all yield nil.
+check(Engine.noiseStopWallClock(for: session(AppSettings(whiteNoiseEnabled: false))) == nil,
+      "noiseStop nil when white noise disabled")
+check(Engine.noiseStopWallClock(for: session(AppSettings(noiseStopEnabled: false))) == nil,
+      "noiseStop nil when stop disabled")
+check(Engine.alarmStartWallClock(for: session(AppSettings(alarmEnabled: false))) == nil,
+      "alarmStart nil when alarm disabled (default)")
+
+// Offset 0: rows equal the wake time.
+let panelZero = session(AppSettings(wakeTime: HourMinute(hour: 7, minute: 0),
+                                    noiseStopOffsetMin: 0,
+                                    alarmEnabled: true,
+                                    alarmOffsetMin: 0))
+check(Engine.noiseStopWallClock(for: panelZero) == HourMinute(hour: 7, minute: 0), "noiseStop +0 equals wake")
+check(Engine.alarmStartWallClock(for: panelZero) == HourMinute(hour: 7, minute: 0), "alarm +0 equals wake")
+
+// Midnight crossing BACKWARD: wake 12:30 AM (0:30), noise -60 -> 11:30 PM.
+let panelMidnightBack = session(AppSettings(wakeTime: HourMinute(hour: 0, minute: 30),
+                                            noiseStopOffsetMin: -60))
+check(Engine.noiseStopWallClock(for: panelMidnightBack) == HourMinute(hour: 23, minute: 30),
+      "noiseStop wraps back across midnight: 12:30 AM -60 = 11:30 PM")
+check(Engine.noiseStopWallClock(for: panelMidnightBack)?.display12h == "11:30 PM",
+      "midnight-back noise row reads 11:30 PM")
+
+// Midnight crossing FORWARD: wake 11:30 PM (23:30), alarm +60 -> 12:30 AM.
+let panelMidnightFwd = session(AppSettings(wakeTime: HourMinute(hour: 23, minute: 30),
+                                           alarmEnabled: true,
+                                           alarmOffsetMin: 60))
+check(Engine.alarmStartWallClock(for: panelMidnightFwd) == HourMinute(hour: 0, minute: 30),
+      "alarm wraps forward across midnight: 11:30 PM +60 = 12:30 AM")
+check(Engine.alarmStartWallClock(for: panelMidnightFwd)?.display12h == "12:30 AM",
+      "midnight-fwd alarm row reads 12:30 AM")
+
+// AM/PM boundary: wake 11:30 AM (11:30), noise +30 -> 12:00 PM (noon),
+// alarm +60 -> 12:30 PM. The AM->PM flip must be correct.
+let panelNoon = session(AppSettings(wakeTime: HourMinute(hour: 11, minute: 30),
+                                    noiseStopOffsetMin: 30,
+                                    alarmEnabled: true,
+                                    alarmOffsetMin: 60))
+check(Engine.noiseStopWallClock(for: panelNoon) == HourMinute(hour: 12, minute: 0),
+      "noise +30 across noon: 11:30 AM -> 12:00 PM")
+check(Engine.noiseStopWallClock(for: panelNoon)?.display12h == "12:00 PM", "noon noise row reads 12:00 PM")
+check(Engine.alarmStartWallClock(for: panelNoon)?.display12h == "12:30 PM", "noon alarm row reads 12:30 PM")
+
+// PM boundary the other way: wake 12:30 PM (12:30), noise -60 -> 11:30 AM.
+let panelAfterNoon = session(AppSettings(wakeTime: HourMinute(hour: 12, minute: 30),
+                                         noiseStopOffsetMin: -60))
+check(Engine.noiseStopWallClock(for: panelAfterNoon)?.display12h == "11:30 AM",
+      "noise -60 across noon: 12:30 PM -> 11:30 AM")
+
+// Live edit mid-session: the accessors read settingsSnapshot, so a changed
+// wake time immediately moves the rows.
+var liveSession = panelSimple
+liveSession.settingsSnapshot.wakeTime = HourMinute(hour: 6, minute: 15)
+check(Engine.wakeWallClock(for: liveSession).display12h == "6:15 AM", "wake row tracks live-edited snapshot")
+check(Engine.noiseStopWallClock(for: liveSession) == HourMinute(hour: 6, minute: 5),
+      "noise row tracks live-edited wake: 6:15 -10 = 6:05")
+
+// ─────────────────────────────────────────────────────────────
 // Summary
 // ─────────────────────────────────────────────────────────────
 
